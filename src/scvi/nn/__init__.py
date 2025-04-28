@@ -6,6 +6,7 @@ from ._base_components import (
     EncoderTOTALVI,
     FCLayers,
     LinearDecoderSCVI,
+    MaskedLinearDecoder,
     MultiDecoder,
     MultiEncoder,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "DecoderSCVI",
     "DecoderTOTALVI",
     "LinearDecoderSCVI",
+    "MaskedLinearDecoder",
     "MultiEncoder",
     "MultiDecoder",
     "one_hot",

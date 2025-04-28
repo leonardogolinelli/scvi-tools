@@ -22,6 +22,7 @@ from ._dataframe_field import (
     MuDataNumericalVarField,
     NumericalObsField,
     NumericalVarField,
+    NumericalVarmField,
 )
 from ._layer_field import LayerField, MuDataLayerField
 from ._mudata import BaseMuDataWrapperClass, MuDataWrapper

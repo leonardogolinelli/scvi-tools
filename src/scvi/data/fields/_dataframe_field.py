@@ -48,6 +48,8 @@ class BaseDataFrameField(BaseAnnDataField):
             self._attr_name = _constants._ADATA_ATTRS.OBS
         elif field_type == "var":
             self._attr_name = _constants._ADATA_ATTRS.VAR
+        elif field_type == "varm":
+            self._attr_name = _constants._ADATA_ATTRS.VARM
         else:
             raise ValueError("`field_type` must be either 'obs' or 'var'.")
 
@@ -120,6 +122,22 @@ class NumericalVarField(NumericalDataFrameField):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, field_type="var", **kwargs)
+
+class NumericalVarmField(NumericalDataFrameField):
+    """An AnnDataField for numerical .varm attributes in the AnnData data structure."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, field_type="varm", **kwargs)
+
+    def validate_field(self, adata: AnnData) -> None:
+        """Validate field."""
+        if self.attr_key not in adata.varm.keys():
+            raise KeyError(f"{self.attr_key} not found in adata.varm.")
+
+    def register_field(self, adata: AnnData) -> dict:
+        """Register field."""
+        self.validate_field(adata)
+        return {}
 
 
 MuDataNumericalObsField = MuDataWrapper(NumericalObsField)
