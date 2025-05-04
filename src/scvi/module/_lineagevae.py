@@ -10,7 +10,7 @@ from scvi.nn import Encoder, MaskedLinearDecoder
 logger = logging.getLogger(__name__)
 
 
-class KINVAE(VAE):
+class LINEAGEVAE(VAE):
     """Linear-decoded Variational auto-encoder model with masked linear decoder."""
 
     def __init__(

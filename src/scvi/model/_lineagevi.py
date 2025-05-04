@@ -10,7 +10,7 @@ from scvi.data import AnnDataManager
 from scvi.data.fields import CategoricalObsField, LayerField, NumericalVarmField
 from scvi.model._utils import _init_library_size
 from scvi.model.base import UnsupervisedTrainingMixin
-from scvi.module._kinvae import KINVAE
+from scvi.module._lineagevae import LINEAGEVAE
 from scvi.utils import setup_anndata_dsp
 import torch
 
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class KINVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
+class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
     """Linearly-decoded VAE :cite:p:`Svensson20`.
 
     Parameters
@@ -75,7 +75,7 @@ class KINVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
     1. :doc:`/tutorials/notebooks/scrna/linear_decoder`
     """
 
-    _module_cls = KINVAE
+    _module_cls = LINEAGEVAE
 
     def __init__(
         self,
