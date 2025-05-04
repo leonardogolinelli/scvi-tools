@@ -201,7 +201,7 @@ class FCLayers(nn.Module):
                             x = torch.cat((x, *cov_list_layer), dim=-1)
                         x = layer(x)
         return x
-
+    
 
 # Encoder
 class Encoder(nn.Module):
@@ -486,11 +486,12 @@ class LinearDecoderSCVI(nn.Module):
     
 
 class MaskedLinearDecoder(nn.Module):
-    """Linear decoder for scVI."""
+    """Linear decoder for scVI with hard mask on its regression weights."""
     def __init__(
         self,
         n_input: int,
         n_output: int,
+        mask: torch.Tensor,
         n_cat_list: Iterable[int] = None,
         use_batch_norm: bool = False,
         use_layer_norm: bool = False,
@@ -498,11 +499,14 @@ class MaskedLinearDecoder(nn.Module):
         **kwargs,
     ):
         super().__init__()
+        # 1) keep mask as a buffer (not a parameter)
+        #    shape must be [out_features, in_features] == [n_output, n_input]
+        self.register_buffer("mask", mask)
 
-        # mean gamma
+        # 2) build your normal 1-layer FCLayers that outputs 2*n_output units
         self.normal_decoder = FCLayers(
             n_in=n_input,
-            n_out=2*n_output,
+            n_out=2 * n_output,
             n_cat_list=n_cat_list,
             n_layers=1,
             use_activation=False,
@@ -513,17 +517,29 @@ class MaskedLinearDecoder(nn.Module):
             **kwargs,
         )
 
+        # 3) pull out the single Linear inside that FCLayers
+        for m in self.normal_decoder.fc_layers[0]:
+            if isinstance(m, nn.Linear):
+                self.linear = m
+                break
+        else:
+            raise RuntimeError("Could not find the Linear layer inside FCLayers.")
+
+        # 4) zero out masked positions at init
+        with torch.no_grad():
+            self.linear.weight.mul_(self.mask)
 
     def forward(self, dispersion: str, z: torch.Tensor, library: torch.Tensor, *cat_list: int):
-        """Forward pass."""
-        # The decoder returns values for the parameters of the ZINB distribution
+        # 5) re-apply mask on every forward under no_grad
+        with torch.no_grad():
+            self.linear.weight.mul_(self.mask)
+
+        # 6) proceed as before
         out = self.normal_decoder(z, *cat_list)
         raw_px_scale, px_r = out.split(out.size(-1) // 2, dim=-1)
         px_scale = torch.softmax(raw_px_scale, dim=-1)
         px_rate = torch.exp(library) * px_scale
         px_dropout = None
-
-
         return px_scale, px_r, px_rate, px_dropout
 
 # Decoder
