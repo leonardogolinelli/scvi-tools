@@ -99,12 +99,12 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass
         # Build and register mask from AnnDataManager
         # ---------------------------------------------------------------------
         # 1) Retrieve 1D mask (n_genes,) from registry
-        mask_1d = torch.as_tensor(
-            self.adata_manager.get_from_registry(REGISTRY_KEYS.MASK_KEY),
-            dtype=torch.float32,
-        )
+        mask = torch.tensor(adata.varm["I"], dtype=torch.float32)
+
+        mask = torch.cat([mask, mask], dim=0)  # shape (2*n_genes,)
+
+        
         # 2) Double for 2*n_genes output dimension
-        mask_weight = torch.cat([mask_1d, mask_1d], dim=0)  # shape (2*n_genes,)
         # 3) Expand to full weight mask: (out_features=2*n_genes, in_features=n_latent)
         #mask_weight = mask_2d.unsqueeze(1).expand(-1, n_latent)
         # ---------------------------------------------------------------------
@@ -122,7 +122,7 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass
             latent_distribution=latent_distribution,
             library_log_means=library_log_means,
             library_log_vars=library_log_vars,
-            mask=mask_weight,                # pass mask here
+            mask=mask,                # pass mask here
             **model_kwargs,
         )
         
@@ -147,6 +147,7 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass
 
         return loadings
 
+
     @classmethod
     @setup_anndata_dsp.dedent
     def setup_anndata(
@@ -154,7 +155,6 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass
         adata: AnnData,
         batch_key: str | None = None,
         labels_key: str | None = None,
-        mask_key: str | None = None,
         layer: str | None = None,
         **kwargs,
     ):
@@ -174,13 +174,6 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass
             CategoricalObsField(REGISTRY_KEYS.LABELS_KEY, labels_key),
         ]
         adata_manager = AnnDataManager(fields=anndata_fields, setup_method_args=setup_method_args)
-        
-        # 2) register and grab the registry dict
-        state_registry = adata_manager.register_fields(adata, **kwargs)
+        adata_manager.register_fields(adata, **kwargs)
+        cls.register_manager(adata_manager)
 
-        # 3) inject your varm mask into that dict
-        if mask_key is not None:
-            state_registry[REGISTRY_KEYS.MASK_KEY] = adata.varm[mask_key]
-
-        # 4) hand both manager + mutated registry off to the model
-        cls.register_manager(adata_manager, state_registry)

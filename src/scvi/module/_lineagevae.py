@@ -84,10 +84,11 @@ class LINEAGEVAE(VAE):
             n_output=n_input,
             mask=self.mask,
             n_cat_list=[n_batch],
-            use_batch_norm=use_batch_norm,
+            use_batch_norm=False,
             use_layer_norm=False,
             bias=bias,
         )
+
 
     @torch.inference_mode()
     def get_loadings(self) -> np.ndarray:
