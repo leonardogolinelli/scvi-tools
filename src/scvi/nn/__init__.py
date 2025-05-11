@@ -7,6 +7,7 @@ from ._base_components import (
     FCLayers,
     LinearDecoderSCVI,
     MaskedLinearDecoder,
+    VelocityDecoder,
     MultiDecoder,
     MultiEncoder,
 )

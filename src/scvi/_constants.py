@@ -17,6 +17,7 @@ class _REGISTRY_KEYS_NT(NamedTuple):
     LATENT_QZV_KEY: str = "latent_qzv"
     OBSERVED_LIB_SIZE: str = "observed_lib_size"
     MASK_KEY: str = "mask"
+    VELOCITY_KEY: str = "velocity"
 
 
 REGISTRY_KEYS = _REGISTRY_KEYS_NT()

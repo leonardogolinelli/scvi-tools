@@ -578,22 +578,21 @@ class VelocityDecoder(nn.Module):
         n_hidden: int = 128,
         **kwargs,
     ):
-        
+    
         super().__init__()
         self.decoder = FCLayers(
             n_in=n_input,
             n_out=n_hidden,
-            n_cat_list=n_cat_list,
+            n_cat_list=None,
             n_layers=n_layers,
             n_hidden=n_hidden,
-            n_output=n_input,
             dropout_rate=0,
             **kwargs,
         )
 
         self.velocity_decoder = nn.Linear(n_hidden, n_output)
 
-    def forward(self, x: torch.Tensor, *cat_list: int):
+    def forward(self, x: torch.Tensor):
         """The forward computation for a single sample.
 
          #. Decodes the data from the latent space using the decoder network
@@ -613,7 +612,7 @@ class VelocityDecoder(nn.Module):
 
         """
         # Parameters for latent distribution
-        p = self.decoder(x, *cat_list)
+        p = self.decoder(x)
         velocity = self.velocity_decoder(p)
         return velocity
 

@@ -7,12 +7,14 @@ import pandas as pd
 
 from scvi import REGISTRY_KEYS
 from scvi.data import AnnDataManager
-from scvi.data.fields import CategoricalObsField, LayerField, NumericalVarmField
+from scvi.data.fields import CategoricalObsField, LayerField, NumericalObsField
 from scvi.model._utils import _init_library_size
 from scvi.model.base import UnsupervisedTrainingMixin
 from scvi.module._lineagevae import LINEAGEVAE
 from scvi.utils import setup_anndata_dsp
 import torch
+import numpy as np
+from sklearn.neighbors import NearestNeighbors
 
 from .base import BaseModelClass, RNASeqMixin, VAEMixin
 
@@ -23,93 +25,47 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
 class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
-    """Linearly-decoded VAE :cite:p:`Svensson20`.
-
-    Parameters
-    ----------
-    adata
-        AnnData object that has been registered via :meth:`~scvi.model.LinearSCVI.setup_anndata`.
-    n_hidden
-        Number of nodes per hidden layer.
-    n_latent
-        Dimensionality of the latent space.
-    n_layers
-        Number of hidden layers used for encoder NN.
-    dropout_rate
-        Dropout rate for neural networks.
-    dispersion
-        One of the following:
-
-        * ``'gene'`` - dispersion parameter of NB is constant per gene across cells
-        * ``'gene-batch'`` - dispersion can differ between different batches
-        * ``'gene-label'`` - dispersion can differ between different labels
-        * ``'gene-cell'`` - dispersion can differ for every gene in every cell
-    gene_likelihood
-        One of:
-
-        * ``'nb'`` - Negative binomial distribution
-        * ``'zinb'`` - Zero-inflated negative binomial distribution
-        * ``'poisson'`` - Poisson distribution
-    latent_distribution
-        One of:
-
-        * ``'normal'`` - Normal distribution
-        * ``'ln'`` - Logistic normal distribution (Normal(0, I) transformed by softmax)
-    **model_kwargs
-        Keyword args for :class:`~scvi.module.LDVAE`
-
-    Examples
-    --------
-    >>> adata = anndata.read_h5ad(path_to_anndata)
-    >>> scvi.model.LinearSCVI.setup_anndata(adata, batch_key="batch")
-    >>> vae = scvi.model.LinearSCVI(adata)
-    >>> vae.train()
-    >>> adata.var["loadings"] = vae.get_loadings()
-
-    Notes
-    -----
-    See further usage examples in the following tutorials:
-
-    1. :doc:`/tutorials/notebooks/scrna/linear_decoder`
-    """
-
     _module_cls = LINEAGEVAE
 
     def __init__(
         self,
         adata: AnnData,
+        K: int = 10,                           # ← NEW: how many neighbors to use
+        distance_key : str = "distances",      # ← NEW: key to use for computing neighbor indices
         n_hidden: int = 128,
         n_latent: int = 10,
         n_layers: int = 1,
         dropout_rate: float = 0.1,
         dispersion: Literal["gene", "gene-batch", "gene-label", "gene-cell"] = "gene",
-        gene_likelihood: Literal["zinb", "nb", "poisson"] = "nb",
+        gene_likelihood: Literal["normal"] = "normal",
         latent_distribution: Literal["normal", "ln"] = "normal",
+        layer: str | None = None,             # keep track of which layer you registered as X_KEY
         **model_kwargs,
     ):
         super().__init__(adata)
 
+        # 1) initialize library‐size prior
         n_batch = self.summary_stats.n_batch
         library_log_means, library_log_vars = _init_library_size(self.adata_manager, n_batch)
 
-        
-        # ---------------------------------------------------------------------
-        # Build and register mask from AnnDataManager
-        # ---------------------------------------------------------------------
-        # 1) Retrieve 1D mask (n_genes,) from registry
+        # 2) build mask as before
         mask = torch.tensor(adata.varm["I"], dtype=torch.float32)
+        mask = torch.cat([mask, mask], dim=0)
 
-        mask = torch.cat([mask, mask], dim=0)  # shape (2*n_genes,)
+        # 1) grab the Field object under X_KEY
+        x_field = self.adata_manager.data_registry[REGISTRY_KEYS.X_KEY]
 
-        
-        # 2) Double for 2*n_genes output dimension
-        # 3) Expand to full weight mask: (out_features=2*n_genes, in_features=n_latent)
-        #mask_weight = mask_2d.unsqueeze(1).expand(-1, n_latent)
-        # ---------------------------------------------------------------------
+        # 2) its attr_name is the user’s layer string (or None if they used adata.X)
+        layer_name = x_field.attr_key
 
-        # Instantiate VAE module with mask
+        # 3) fetch the matrix
+        if layer_name is None:
+            input_layer = adata.X
+        else:
+            input_layer = adata.layers[layer_name]
+
+        # 4) now instantiate your module, forwarding the new arguments
         self.module = self._module_cls(
             n_input=self.summary_stats.n_vars,
             n_batch=n_batch,
@@ -122,18 +78,51 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass
             latent_distribution=latent_distribution,
             library_log_means=library_log_means,
             library_log_vars=library_log_vars,
-            mask=mask,                # pass mask here
+            mask=mask,
+            # ▶ NEW:
+            input_layer=input_layer,
+            K=K,
             **model_kwargs,
         )
-        
+
+        # ----------------------------------------------------------------
+        # Compute nn_indices from adata.obsp[distance_key] (or fallback)
+        # ----------------------------------------------------------------
+        # 1) pick your data_for_fit and metric
+        if distance_key in adata.obsp:
+            raw = adata.obsp[distance_key]
+            metric = "precomputed"
+            # if this is a connectivity ( similarity ), invert it
+            if distance_key == "connectivities":
+                # larger = closer → turn into a distance
+                data_for_fit = 1.0 - raw
+            else:
+                data_for_fit = raw
+        else:
+            # no graph: use the expression / layer as a feature matrix
+            metric = "euclidean"
+            data_for_fit = input_layer
+
+        # 2) fit + kneighbors for K+1 (so you can drop self)
+        nbrs = NearestNeighbors(n_neighbors=K + 1, metric=metric)
+        nbrs.fit(data_for_fit)
+        _, all_idxs = nbrs.kneighbors(data_for_fit)
+
+        # 3) slice off the self-index and keep only K neighbors
+        nn_idx = all_idxs[:, 1 : K + 1]  # shape (n_cells, K)
+
+        # 4) register on the module so it lands on GPU
+        self.module.register_buffer("nn_indices", torch.from_numpy(nn_idx).long())
+
         self._model_summary_string = (
-            f"LinearSCVI Model with the following params: \nn_hidden: {n_hidden}, "
-            f"n_latent: {n_latent}, n_layers: {n_layers}, dropout_rate: {dropout_rate}, "
-            f"dispersion: {dispersion}, gene_likelihood: {gene_likelihood}, "
-            f"latent_distribution: {latent_distribution}"
+            f"LINEAGEVI Model with n_hidden={n_hidden}, n_latent={n_latent}, "
+            f"n_layers={n_layers}, dropout_rate={dropout_rate}, dispersion={dispersion}, "
+            f"gene_likelihood={gene_likelihood}, latent_distribution={latent_distribution}"
+            f"LINEAGEVI w/ K={K}, distance_key={distance_key}, "
         )
         self.n_latent = n_latent
         self.init_params_ = self._get_init_params(locals())
+
 
     def get_loadings(self) -> pd.DataFrame:
         """Extract per-gene weights in the linear decoder.
@@ -167,11 +156,13 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass
         %(param_labels_key)s
         %(param_layer)s
         """
+        adata.obs["_scvi_cell_index"] = np.arange(adata.n_obs, dtype=int)
         setup_method_args = cls._get_setup_method_args(**locals())
         anndata_fields = [
-            LayerField(REGISTRY_KEYS.X_KEY, layer, is_count_data=True),
+            LayerField(REGISTRY_KEYS.X_KEY, layer, is_count_data=False),
             CategoricalObsField(REGISTRY_KEYS.BATCH_KEY, batch_key),
             CategoricalObsField(REGISTRY_KEYS.LABELS_KEY, labels_key),
+            NumericalObsField(REGISTRY_KEYS.INDICES_KEY, "_scvi_cell_index"),
         ]
         adata_manager = AnnDataManager(fields=anndata_fields, setup_method_args=setup_method_args)
         adata_manager.register_fields(adata, **kwargs)
