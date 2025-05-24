@@ -6,6 +6,8 @@ import torch
 from torch import nn
 from torch.distributions import Normal
 from torch.nn import ModuleList
+import torch.nn.functional as F
+
 
 from scvi.nn._utils import ExpActivation
 
@@ -568,7 +570,6 @@ class VelocityDecoder(nn.Module):
         Keyword args for :class:`~scvi.module._base.FCLayers`
     """
 
-    import torch.nn.functional as F
 
     def __init__(
         self,
@@ -579,7 +580,7 @@ class VelocityDecoder(nn.Module):
         n_hidden: int = 128,
         **kwargs,
     ):
-    
+
         super().__init__()
         self.decoder = FCLayers(
             n_in=n_input,
@@ -591,7 +592,19 @@ class VelocityDecoder(nn.Module):
             **kwargs,
         )
 
-        self.velocity_decoder = nn.Linear(n_hidden, n_output)
+        if not kinetic_params:
+            self.velocity_decoder = nn.Sequential(
+                nn.Linear(n_hidden, n_output),
+                nn.Softmax(dim=-1),
+            )
+
+        else:
+            self.velocity_decoder = nn.Sequential(
+                nn.Linear(n_hidden, n_output),
+                nn.Softmax(dim=-1),
+            )
+
+        
 
     def forward(self, x: torch.Tensor):
         """The forward computation for a single sample.
@@ -614,10 +627,16 @@ class VelocityDecoder(nn.Module):
         """
         # Parameters for latent distribution
         p = self.decoder(x)
-        velocity = self.velocity_decoder(p)
-        velocity = F.softmax(velocity, dim=-1)
-        return velocity
+        if not kinetic_params:
+            velocity = self.velocity_decoder(p)
 
+        else:
+            #alpha, beta, gamma = ...
+            #velocity = ...
+            #velocity_u = ...
+
+
+        return velocity
 
 # Decoder
 class Decoder(nn.Module):

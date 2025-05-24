@@ -463,8 +463,7 @@ class VAEMixin:
             final = torch.cat(all_vels, dim=0)  # (total_cells, G')
 
         velos = final.numpy()
-        if return_negative_velo:
-            velos = -velos
+        
         return velos
 
 
