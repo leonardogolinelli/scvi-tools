@@ -20,7 +20,7 @@ class _MODULE_KEYS(NamedTuple):
     PL_KEY: str = "pl"
     PZ_KEY: str = "pz"
     # velocity
-    VELO_KEY: str = "velocity"
+    VELOCITY_KEY: str = "velocity"
     # loss
     KL_L_KEY: str = "kl_divergence_l"
     KL_Z_KEY: str = "kl_divergence_z"

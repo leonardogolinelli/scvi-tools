@@ -429,7 +429,6 @@ class DecoderSCVI(nn.Module):
         px_r = self.px_r_decoder(px) if dispersion == "gene-cell" else None
         return px_scale, px_r, px_rate, px_dropout
 
-
 class LinearDecoderSCVI(nn.Module):
     """Linear decoder for scVI."""
 
@@ -569,6 +568,8 @@ class VelocityDecoder(nn.Module):
         Keyword args for :class:`~scvi.module._base.FCLayers`
     """
 
+    import torch.nn.functional as F
+
     def __init__(
         self,
         n_input: int,
@@ -614,6 +615,7 @@ class VelocityDecoder(nn.Module):
         # Parameters for latent distribution
         p = self.decoder(x)
         velocity = self.velocity_decoder(p)
+        velocity = F.softmax(velocity, dim=-1)
         return velocity
 
 

@@ -72,6 +72,11 @@ class LINEAGEVAE(VAE):
         if sp.issparse(input_layer):
             arr = input_layer.toarray()
 
+        else:
+            # if it’s already an ndarray we can use it, otherwise coerce
+            import numpy as np
+            arr = np.asarray(input_layer)
+
         arr = arr.astype(np.float32, copy=False)
         
         self.register_buffer(
@@ -150,7 +155,7 @@ class LINEAGEVAE(VAE):
         )
         # add velocity prediction
         velo = self.velo_decoder(z)
-        outputs[MODULE_KEYS.VELO_KEY] = velo
+        outputs[MODULE_KEYS.VELOCITY_KEY] = velo
         return outputs
 
     def _velocity_loss(
@@ -187,7 +192,7 @@ class LINEAGEVAE(VAE):
             tensors, inference_outputs, generative_outputs, kl_weight
         )
         # velocity prediction from generative outputs
-        vel = generative_outputs[MODULE_KEYS.VELO_KEY]
+        vel = generative_outputs[MODULE_KEYS.VELOCITY_KEY]
         # raw counts and global index
         x = tensors[REGISTRY_KEYS.X_KEY]
         idxs = tensors[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
