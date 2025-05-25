@@ -591,30 +591,12 @@ class VelocityDecoder(nn.Module):
             **kwargs,
         )
 
-        self.velocity_decoder = nn.Sequential(
-                nn.Linear(n_hidden, n_output),
-                #nn.Softmax(dim=-1),
+        self.params_decoder = nn.Sequential(
+                nn.Linear(n_hidden, 3*n_output),
+                nn.ReLU(dim=-1),
         )
 
-        """self.gp_velo_decoder = nn.Sequential(
-            nn.Linear(n_hidden, n_latent)
-        )"""
-
-        """if not kinetic_params:
-            self.velocity_decoder = nn.Sequential(
-                nn.Linear(n_hidden, n_output),
-                nn.Softmax(dim=-1),
-            )
-
-        else:
-            self.velocity_decoder = nn.Sequential(
-                nn.Linear(n_hidden, n_output),
-                nn.Softmax(dim=-1),
-            )"""
-
-        
-
-    def forward(self, x: torch.Tensor):
+    def forward(self, z: torch.Tensor, x: torch.Tensor):
         """The forward computation for a single sample.
 
          #. Decodes the data from the latent space using the decoder network
@@ -640,8 +622,15 @@ class VelocityDecoder(nn.Module):
         x += noise"""
 
         # Parameters for latent distribution
-        p = self.decoder(x)
-        velocity = self.velocity_decoder(p) 
+        p = self.decoder(z)
+        params = self.velocity_decoder(p) 
+        alpha, beta, gamma = torch.tensor_split(params, 3, dim=-1)
+        u, s = torch.tensor_split(x, 2, dim=-1)
+        velocity_u = alpha - beta * u
+        velocity = beta * u - gamma * s
+
+        velocity_concat = torch.cat((velocity_u, velocity), dim=-1)
+
         #gp_velocity = self.gp_velo_decoder(p)
 
         """if not kinetic_params:
@@ -652,8 +641,7 @@ class VelocityDecoder(nn.Module):
             #velocity = ...
             #velocity_u = ..."""
 
-
-        return velocity
+        return velocity_concat
 
 # Decoder
 class Decoder(nn.Module):

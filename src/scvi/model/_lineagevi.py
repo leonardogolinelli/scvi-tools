@@ -85,7 +85,7 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
             **model_kwargs,
         )
         
-        data_for_fit = adata.layers["Ms"]
+        data_for_fit = adata.obsm["X_pca"]
         nbrs = NearestNeighbors(n_neighbors=K + 1, metric="euclidean")
         nbrs.fit(data_for_fit)
         _, all_idxs = nbrs.kneighbors(data_for_fit)

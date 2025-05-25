@@ -522,33 +522,38 @@ class TrainingPlan(pl.LightningModule):
 
 class TwoPhaseTrainingPlan(TrainingPlan):
     def __init__(self, module, *, first_phase_epochs=100, **kwargs):
-        # force KL warmup = first_phase_epochs
         kwargs["n_epochs_kl_warmup"] = first_phase_epochs
         super().__init__(module, **kwargs)
         self.first_phase_epochs = first_phase_epochs
         self._in_phase_two = False
-        # start in phase 1
         self.module.phase = 1
 
     def on_train_start(self):
-        # freeze velocity decoder in phase 1
-        for p in self.module.velo_decoder.parameters():
-            p.requires_grad = False
+        print("\n[Phase 1] Parameter requires_grad status:")
+
+        for name, param in self.module.named_parameters():
+            if name.startswith("velo_decoder"):
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
+
+        #for name, param in self.module.named_parameters():
+        #    print(f"{name}: {param.requires_grad}")
 
     def on_train_epoch_start(self):
-        # flip into phase 2 at the start of epoch == first_phase_epochs
+        # Switch to phase 2 at the right epoch
         if not self._in_phase_two and self.current_epoch >= self.first_phase_epochs:
             self._in_phase_two = True
-            # freeze everything…
-            for p in self.module.parameters():
-                p.requires_grad = False
-            # …then un-freeze only the velocity head
-            for p in self.module.velo_decoder.parameters():
-                p.requires_grad = True
-            # pin KL so it never moves again
-            self.min_kl_weight = self.max_kl_weight
-            # mark the module so its own loss() can switch if you like
-            self.module.phase = 2            # mark the module so its own loss() can switch if you like
+            self.module.phase = 2
+            # Unfreeze velocity decoder, freeze others
+            for name, param in self.module.named_parameters():
+                if name.startswith("velo_decoder"):
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+            print("\n[Phase 2] Parameter requires_grad status:")
+            #for name, param in self.module.named_parameters():
+            #    print(f"{name}: {param.requires_grad}")
 
             self.log("phase", torch.tensor(2.0), prog_bar=True)
 
