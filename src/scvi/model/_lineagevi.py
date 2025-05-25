@@ -9,7 +9,7 @@ from scvi import REGISTRY_KEYS
 from scvi.data import AnnDataManager
 from scvi.data.fields import CategoricalObsField, LayerField, NumericalObsField
 from scvi.model._utils import _init_library_size
-from scvi.model.base import UnsupervisedTrainingMixin
+from scvi.model.base import TwoPhaseTrainingMixin
 from scvi.module._lineagevae import LINEAGEVAE
 from scvi.utils import setup_anndata_dsp
 import torch
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-class LINEAGEVI(RNASeqMixin, VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
+class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
     _module_cls = LINEAGEVAE
 
     def __init__(

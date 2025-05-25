@@ -27,6 +27,8 @@ from scvi.module.base import (
     TrainStateWithState,
 )
 from scvi.train._constants import METRIC_KEYS
+from scvi.module._constants import MODULE_KEYS
+
 
 from ._metrics import ElboMetric
 
@@ -516,6 +518,93 @@ class TrainingPlan(pl.LightningModule):
         return (
             klw if type(self).__name__ == "JaxTrainingPlan" else torch.tensor(klw).to(self.device)
         )
+
+
+class TwoPhaseTrainingPlan(TrainingPlan):
+    def __init__(self, module, *, first_phase_epochs=100, **kwargs):
+        # force KL warmup = first_phase_epochs
+        kwargs["n_epochs_kl_warmup"] = first_phase_epochs
+        super().__init__(module, **kwargs)
+        self.first_phase_epochs = first_phase_epochs
+        self._in_phase_two = False
+        # start in phase 1
+        self.module.phase = 1
+
+    def on_train_start(self):
+        # freeze velocity decoder in phase 1
+        for p in self.module.velo_decoder.parameters():
+            p.requires_grad = False
+
+    def on_train_epoch_start(self):
+        # flip into phase 2 at the start of epoch == first_phase_epochs
+        if not self._in_phase_two and self.current_epoch >= self.first_phase_epochs:
+            self._in_phase_two = True
+            # freeze everything…
+            for p in self.module.parameters():
+                p.requires_grad = False
+            # …then un-freeze only the velocity head
+            for p in self.module.velo_decoder.parameters():
+                p.requires_grad = True
+            # pin KL so it never moves again
+            self.min_kl_weight = self.max_kl_weight
+            # mark the module so its own loss() can switch if you like
+            self.module.phase = 2
+            self.log("phase", torch.tensor(2.0), prog_bar=True)
+
+    def training_step(self, batch, batch_idx):
+        if not self._in_phase_two:
+            return super().training_step(batch, batch_idx)
+
+        inf_out, gen_out = self.module(
+            batch,
+            compute_loss=False,
+            get_inference_input_kwargs={"full_forward_pass": not self.update_only_decoder},
+        )
+        x    = batch[REGISTRY_KEYS.X_KEY]
+        idxs = batch[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
+        vel  = gen_out[MODULE_KEYS.VELOCITY_KEY]
+        velo_loss = self.module._velocity_loss(vel, x, idxs)
+
+        # only log as train_loss
+        self.log(
+            "train_loss",
+            velo_loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=self.use_sync_dist,
+        )
+        return velo_loss
+
+
+    def validation_step(self, batch, batch_idx):
+        # Phase 1: regular validation
+        if not self._in_phase_two:
+            return super().validation_step(batch, batch_idx)
+
+        # Phase 2: velocity‐only validation
+        inf_out, gen_out = self.module(
+            batch,
+            compute_loss=False,
+            get_inference_input_kwargs={"full_forward_pass": not self.update_only_decoder},
+        )
+        x = batch[REGISTRY_KEYS.X_KEY]
+        idxs = batch[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
+        vel = gen_out[MODULE_KEYS.VELOCITY_KEY]
+        velo_loss = self.module._velocity_loss(vel, x, idxs)
+        self.log(
+            "velocity_loss_validation",
+            velo_loss,
+            on_step=False,
+            on_epoch=True,
+            sync_dist=self.use_sync_dist,
+        )
+
+    def configure_optimizers(self):
+        # optimizer will only pick up the now‐unfrozen velocity params in phase 2
+        return super().configure_optimizers()
+
+    
 
 
 class AdversarialTrainingPlan(TrainingPlan):

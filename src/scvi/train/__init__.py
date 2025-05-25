@@ -16,11 +16,13 @@ from ._trainingplans import (
     SemiSupervisedAdversarialTrainingPlan,
     SemiSupervisedTrainingPlan,
     TrainingPlan,
+    TwoPhaseTrainingPlan,
 )
 from ._trainrunner import TrainRunner
 
 __all__ = [
     "TrainingPlan",
+    "TwoPhaseTrainingPlan",
     "Trainer",
     "PyroTrainingPlan",
     "LowLevelPyroTrainingPlan",

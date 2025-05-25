@@ -18,6 +18,7 @@ from scvi.train import (
     SemiSupervisedTrainingPlan,
     TrainingPlan,
     TrainRunner,
+    TwoPhaseTrainingPlan,
 )
 from scvi.train._callbacks import SubSampleLabels
 from scvi.utils._docstrings import devices_dsp
@@ -159,6 +160,29 @@ class UnsupervisedTrainingMixin:
             **trainer_kwargs,
         )
         return runner()
+
+class TwoPhaseTrainingMixin(UnsupervisedTrainingMixin):
+    _training_plan_cls = TwoPhaseTrainingPlan
+
+    def train(
+        self,
+        *args,
+        first_phase_epochs: int | None = None,
+        plan_kwargs: dict | None = None,
+        **trainer_kwargs,
+    ):
+        # Merge the explicit first_phase_epochs into plan_kwargs
+        plan_kwargs = {} if plan_kwargs is None else dict(plan_kwargs)
+        if first_phase_epochs is not None:
+            plan_kwargs["first_phase_epochs"] = first_phase_epochs
+
+        # Now call the parent train, which will forward plan_kwargs into the plan
+        return super().train(
+            *args,
+            plan_kwargs=plan_kwargs,
+            **trainer_kwargs,
+        )
+
 
 
 class SemisupervisedTrainingMixin:

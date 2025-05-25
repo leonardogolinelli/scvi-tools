@@ -592,7 +592,16 @@ class VelocityDecoder(nn.Module):
             **kwargs,
         )
 
-        if not kinetic_params:
+        self.velocity_decoder = nn.Sequential(
+                nn.Linear(n_hidden, n_output),
+                #nn.Softmax(dim=-1),
+        )
+
+        """self.gp_velo_decoder = nn.Sequential(
+            nn.Linear(n_hidden, n_latent)
+        )"""
+
+        """if not kinetic_params:
             self.velocity_decoder = nn.Sequential(
                 nn.Linear(n_hidden, n_output),
                 nn.Softmax(dim=-1),
@@ -602,7 +611,7 @@ class VelocityDecoder(nn.Module):
             self.velocity_decoder = nn.Sequential(
                 nn.Linear(n_hidden, n_output),
                 nn.Softmax(dim=-1),
-            )
+            )"""
 
         
 
@@ -627,13 +636,16 @@ class VelocityDecoder(nn.Module):
         """
         # Parameters for latent distribution
         p = self.decoder(x)
-        if not kinetic_params:
+        velocity = self.velocity_decoder(p)
+        #gp_velocity = self.gp_velo_decoder(p)
+
+        """if not kinetic_params:
             velocity = self.velocity_decoder(p)
 
         else:
             #alpha, beta, gamma = ...
             #velocity = ...
-            #velocity_u = ...
+            #velocity_u = ..."""
 
 
         return velocity

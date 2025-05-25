@@ -74,7 +74,6 @@ class LINEAGEVAE(VAE):
 
         else:
             # if it’s already an ndarray we can use it, otherwise coerce
-            import numpy as np
             arr = np.asarray(input_layer)
 
         arr = arr.astype(np.float32, copy=False)
@@ -87,6 +86,7 @@ class LINEAGEVAE(VAE):
         # kNN hyperparameters
         self.K = K
         self.velocity_loss_weight = velocity_loss_weight
+        self.phase = 1
 
         self.use_batch_norm = use_batch_norm
         # encoders
@@ -180,7 +180,6 @@ class LINEAGEVAE(VAE):
         max_sim, _ = cos_sim.max(dim=1)                      # (B,)
         return (1.0 - max_sim).mean()
 
-    @unsupported_if_adata_minified
     def loss(
         self,
         tensors: dict[str, torch.Tensor],
@@ -188,24 +187,30 @@ class LINEAGEVAE(VAE):
         generative_outputs: dict[str, Distribution | None],
         kl_weight: torch.Tensor | float = 1.0,
     ) -> LossOutput:
-        base_out = super().loss(
-            tensors, inference_outputs, generative_outputs, kl_weight
-        )
-        # velocity prediction from generative outputs
+        # -------------------------------------------------------------------
+        # PHASE 1: only the base VAE loss (reconstruction + KL)
+        # PHASE 2: only the velocity loss
+        # -------------------------------------------------------------------
+        if self.phase == 1:
+            # exactly as before, ignore velocity
+            return super().loss(tensors, inference_outputs, generative_outputs, kl_weight)
+
+        # phase == 2 → zero out the base and only apply velocity
+        # pull out your predicted velocity + inputs
         vel = generative_outputs[MODULE_KEYS.VELOCITY_KEY]
-        # raw counts and global index
-        x = tensors[REGISTRY_KEYS.X_KEY]
-        idxs = tensors[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
-        # compute heuristic loss
-        velo_loss = self._velocity_loss(vel, x, idxs)
-        total = base_out.loss + self.velocity_loss_weight * velo_loss
-        extra = dict(base_out.extra_metrics)
-        extra["velocity_loss"] = velo_loss
+        x   = tensors[REGISTRY_KEYS.X_KEY]
+        idx = tensors[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
+
+        # compute just the velocity‐only loss
+        velo_loss = self._velocity_loss(vel, x, idx)
+
+        # return a “pure” velocity LossOutput
         return LossOutput(
-            loss=total,
-            reconstruction_loss=base_out.reconstruction_loss,
-            kl_local=base_out.kl_local,
-            extra_metrics=extra,
+            loss=velo_loss,
+            # zeros for all the ELBO bits so metrics see nothing
+            reconstruction_loss=torch.tensor(0.0, device=velo_loss.device),
+            kl_local=torch.tensor(0.0, device=velo_loss.device),
+            extra_metrics={"velocity_loss": velo_loss},
         )
 
     @torch.inference_mode()
