@@ -548,10 +548,11 @@ class TwoPhaseTrainingPlan(TrainingPlan):
             # pin KL so it never moves again
             self.min_kl_weight = self.max_kl_weight
             # mark the module so its own loss() can switch if you like
-            self.module.phase = 2
+            self.module.phase = 2            # mark the module so its own loss() can switch if you like
+
             self.log("phase", torch.tensor(2.0), prog_bar=True)
 
-    def training_step(self, batch, batch_idx):
+    """def training_step(self, batch, batch_idx):
         if not self._in_phase_two:
             return super().training_step(batch, batch_idx)
 
@@ -574,7 +575,7 @@ class TwoPhaseTrainingPlan(TrainingPlan):
             prog_bar=True,
             sync_dist=self.use_sync_dist,
         )
-        return velo_loss
+        return velo_loss"""
 
 
     def validation_step(self, batch, batch_idx):

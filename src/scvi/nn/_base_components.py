@@ -588,7 +588,6 @@ class VelocityDecoder(nn.Module):
             n_cat_list=None,
             n_layers=n_layers,
             n_hidden=n_hidden,
-            dropout_rate=0,
             **kwargs,
         )
 
@@ -634,9 +633,15 @@ class VelocityDecoder(nn.Module):
             Mean and variance tensors of shape ``(n_output,)``
 
         """
+
+        """with torch.no_grad():
+            noise = torch.randn_like(x) * 0.01
+
+        x += noise"""
+
         # Parameters for latent distribution
         p = self.decoder(x)
-        velocity = self.velocity_decoder(p)
+        velocity = self.velocity_decoder(p) 
         #gp_velocity = self.gp_velo_decoder(p)
 
         """if not kinetic_params:

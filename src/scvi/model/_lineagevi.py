@@ -84,27 +84,9 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
             K=K,
             **model_kwargs,
         )
-
-        # ----------------------------------------------------------------
-        # Compute nn_indices from adata.obsp[distance_key] (or fallback)
-        # ----------------------------------------------------------------
-        # 1) pick your data_for_fit and metric
-        if distance_key in adata.obsp:
-            raw = adata.obsp[distance_key]
-            metric = "precomputed"
-            # if this is a connectivity ( similarity ), invert it
-            if distance_key == "connectivities":
-                # larger = closer → turn into a distance
-                data_for_fit = 1.0 - raw
-            else:
-                data_for_fit = raw
-        else:
-            # no graph: use the expression / layer as a feature matrix
-            metric = "euclidean"
-            data_for_fit = input_layer
-
-        # 2) fit + kneighbors for K+1 (so you can drop self)
-        nbrs = NearestNeighbors(n_neighbors=K + 1, metric=metric)
+        
+        data_for_fit = adata.layers["Ms"]
+        nbrs = NearestNeighbors(n_neighbors=K + 1, metric="euclidean")
         nbrs.fit(data_for_fit)
         _, all_idxs = nbrs.kneighbors(data_for_fit)
 

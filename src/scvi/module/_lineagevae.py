@@ -128,8 +128,10 @@ class LINEAGEVAE(VAE):
             n_output=n_input,
             n_hidden=n_hidden,
             n_cat_list=[n_batch],
-            use_batch_norm=True,
-            use_layer_norm=False,
+            use_batch_norm=False,
+            use_layer_norm=True,
+            use_activation=True,
+            dropout_rate=0
         )
 
     @auto_move_data
@@ -197,6 +199,7 @@ class LINEAGEVAE(VAE):
 
         # phase == 2 → zero out the base and only apply velocity
         # pull out your predicted velocity + inputs
+        
         vel = generative_outputs[MODULE_KEYS.VELOCITY_KEY]
         x   = tensors[REGISTRY_KEYS.X_KEY]
         idx = tensors[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
@@ -204,12 +207,14 @@ class LINEAGEVAE(VAE):
         # compute just the velocity‐only loss
         velo_loss = self._velocity_loss(vel, x, idx)
 
+        zeros = torch.zeros(x.shape[0], device=velo_loss.device)
+
         # return a “pure” velocity LossOutput
         return LossOutput(
             loss=velo_loss,
             # zeros for all the ELBO bits so metrics see nothing
-            reconstruction_loss=torch.tensor(0.0, device=velo_loss.device),
-            kl_local=torch.tensor(0.0, device=velo_loss.device),
+            reconstruction_loss=zeros,
+            kl_local=zeros,
             extra_metrics={"velocity_loss": velo_loss},
         )
 
