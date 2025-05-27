@@ -10,6 +10,7 @@ from ._vae import VAE
 from scvi.nn import Encoder, MaskedLinearDecoder, VelocityDecoder
 from scvi import REGISTRY_KEYS
 from scvi.module._constants import MODULE_KEYS
+from scvi.data._constants import ADATA_MINIFY_TYPE
 from scvi.module.base import (
     LossOutput,
     auto_move_data,
@@ -40,7 +41,8 @@ class LINEAGEVAE(VAE):
         latent_distribution: str = "normal",
         use_observed_lib_size: bool = False,
         mask: torch.Tensor | None = None,
-        input_layer: np.ndarray | None = None,
+        unspliced_layer: np.ndarray | None = None,
+        spliced_layer: np.ndarray | None = None,
         K: int = 10,
         velocity_loss_weight: float = 1.0,
         **kwargs,
@@ -65,22 +67,20 @@ class LINEAGEVAE(VAE):
         if mask is not None:
             self.register_buffer("mask", mask)
 
-        # register global input matrix for kNN lookup
-        if input_layer is None:
-            raise ValueError("`input_layer` must be provided for kNN velocity loss.")
-        
-        if sp.issparse(input_layer):
-            arr = input_layer.toarray()
+        unspliced = unspliced_layer.toarray() if sp.issparse(unspliced_layer) else unspliced_layer
+        spliced = spliced_layer.toarray() if sp.issparse(spliced_layer) else spliced_layer
 
-        else:
-            # if it’s already an ndarray we can use it, otherwise coerce
-            arr = np.asarray(input_layer)
+        unspliced = unspliced.astype(np.float32, copy=False)
+        spliced = spliced.astype(np.float32, copy=False)
 
-        arr = arr.astype(np.float32, copy=False)
-        
+        # concatenate full unspliced and spliced
+        full_u_s = np.concatenate(
+            [unspliced, spliced], axis=1
+        ) # (B, G*2)
+
         self.register_buffer(
             "full_data",
-            torch.from_numpy(np.asarray(arr)).float(),
+            torch.from_numpy(np.asarray(full_u_s)).float(),
         )
 
         # kNN hyperparameters
@@ -101,6 +101,7 @@ class LINEAGEVAE(VAE):
             use_layer_norm=False,
             return_dist=True,
         )
+
         self.l_encoder = Encoder(
             n_input,
             1,
@@ -111,10 +112,11 @@ class LINEAGEVAE(VAE):
             use_layer_norm=False,
             return_dist=True,
         )
+        
         # masked linear decoder
         self.decoder = MaskedLinearDecoder(
             n_input=n_latent,
-            n_output=n_input,
+            n_output=2*n_input, # unspliced (mean,std), spliced (mean,std)
             mask=self.mask,
             n_cat_list=[n_batch],
             use_batch_norm=False,
@@ -125,7 +127,7 @@ class LINEAGEVAE(VAE):
         # velocity decoder (simple FFN)
         self.velo_decoder = VelocityDecoder(
             n_input=n_latent,
-            n_output=n_input,
+            n_output=3*n_input, # alpha, beta, gamma for each gene
             n_hidden=n_hidden,
             n_cat_list=[n_batch],
             use_batch_norm=False,
@@ -134,29 +136,72 @@ class LINEAGEVAE(VAE):
             dropout_rate=0
         )
 
-    @auto_move_data
-    def generative(
+    def _get_inference_input(
         self,
-        z: torch.Tensor,
-        library: torch.Tensor,
-        batch_index: torch.Tensor,
-        cont_covs: torch.Tensor | None = None,
-        cat_covs: torch.Tensor | None = None,
-        size_factor: torch.Tensor | None = None,
-        y: torch.Tensor | None = None,
-        transform_batch: torch.Tensor | None = None,
-    ) -> dict[str, Distribution | None]:
-        # call parent for PX, PZ, PL
+        tensors: dict[str, torch.Tensor | None],
+        full_forward_pass: bool = False,
+    ) -> dict[str, torch.Tensor | None]:
+        """Get input tensors for the inference process."""
+        if full_forward_pass or self.minified_data_type is None:
+            loader = "full_data"
+        elif self.minified_data_type in [
+            ADATA_MINIFY_TYPE.LATENT_POSTERIOR,
+            ADATA_MINIFY_TYPE.LATENT_POSTERIOR_WITH_COUNTS,
+        ]:
+            loader = "minified_data"
+        else:
+            raise NotImplementedError(f"Unknown minified-data type: {self.minified_data_type}")
+
+        if loader == "full_data":
+            return {
+                MODULE_KEYS.X_KEY: tensors[REGISTRY_KEYS.SPLICED_KEY],
+                MODULE_KEYS.BATCH_INDEX_KEY: tensors[REGISTRY_KEYS.BATCH_KEY],
+                MODULE_KEYS.CONT_COVS_KEY: tensors.get(REGISTRY_KEYS.CONT_COVS_KEY, None),
+                MODULE_KEYS.CAT_COVS_KEY: tensors.get(REGISTRY_KEYS.CAT_COVS_KEY, None),
+            }
+        else:
+            return {
+                MODULE_KEYS.QZM_KEY: tensors[REGISTRY_KEYS.LATENT_QZM_KEY],
+                MODULE_KEYS.QZV_KEY: tensors[REGISTRY_KEYS.LATENT_QZV_KEY],
+                REGISTRY_KEYS.OBSERVED_LIB_SIZE: tensors[REGISTRY_KEYS.OBSERVED_LIB_SIZE],
+            }    
+
+    def _get_generative_input(self, tensors, inference_outputs):
+        # first get the standard args
+        gen_inputs = super()._get_generative_input(tensors, inference_outputs)
+        # now build the x you actually want
+        u = tensors[REGISTRY_KEYS.UNSPLICED_KEY]
+        s = tensors[REGISTRY_KEYS.SPLICED_KEY]
+        x = torch.cat([u, s], dim=1)
+        # and inject it under the name your generative() expects:
+        gen_inputs[MODULE_KEYS.X_KEY] = x
+        return gen_inputs
+    
+    @auto_move_data
+    def generative(self,
+                   x,           # <-- will now get the x you just inserted
+                   z,
+                   library,
+                   batch_index,
+                   cont_covs=None,
+                   cat_covs=None,
+                   size_factor=None,
+                   y=None,
+                   transform_batch=None,
+    ):
+        # call the parent to get everything but 'x'
         outputs = super().generative(
-            z, library, batch_index,
+            z,
+            library,
+            batch_index,
             cont_covs=cont_covs,
             cat_covs=cat_covs,
             size_factor=size_factor,
             y=y,
             transform_batch=transform_batch,
         )
-        # add velocity prediction
-        velo = self.velo_decoder(z)
+        # now you can use x however you like
+        velo = self.velo_decoder(z, x)
         outputs[MODULE_KEYS.VELOCITY_KEY] = velo
         return outputs
 
@@ -176,6 +221,7 @@ class LINEAGEVAE(VAE):
                 .index_select(0, flat_idx)
                 .view(B, K, G)
         )
+
         # differences and cosine similarity
         diffs   = neigh_data - x.unsqueeze(1)                # (B, K, G)
         cos_sim = F.cosine_similarity(diffs, velocity_pred.unsqueeze(1), dim=-1)  # (B,K)
@@ -201,13 +247,15 @@ class LINEAGEVAE(VAE):
         # pull out your predicted velocity + inputs
         
         vel = generative_outputs[MODULE_KEYS.VELOCITY_KEY]
-        x   = tensors[REGISTRY_KEYS.X_KEY]
+        unspliced = tensors[REGISTRY_KEYS.UNSPLICED_KEY]
+        spliced = tensors[REGISTRY_KEYS.SPLICED_KEY]
+        u_s = torch.cat([unspliced, spliced], dim=1)  # (B, G*2)
         idx = tensors[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
 
         # compute just the velocity‐only loss
-        velo_loss = self._velocity_loss(vel, x, idx)
+        velo_loss = self._velocity_loss(vel, u_s, idx)
 
-        zeros = torch.zeros(x.shape[0], device=velo_loss.device)
+        zeros = torch.zeros(unspliced.shape[0], device=velo_loss.device)
 
         # return a “pure” velocity LossOutput
         return LossOutput(

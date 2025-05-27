@@ -40,7 +40,6 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         dispersion: Literal["gene", "gene-batch", "gene-label", "gene-cell"] = "gene",
         gene_likelihood: Literal["normal"] = "normal",
         latent_distribution: Literal["normal", "ln"] = "normal",
-        layer: str | None = None,             # keep track of which layer you registered as X_KEY
         **model_kwargs,
     ):
         super().__init__(adata)
@@ -54,20 +53,12 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         mask = torch.cat([mask, mask], dim=0)
 
         # 1) grab the Field object under X_KEY
-        x_field = self.adata_manager.data_registry[REGISTRY_KEYS.X_KEY]
-
-        # 2) its attr_name is the user’s layer string (or None if they used adata.X)
-        layer_name = x_field.attr_key
-
-        # 3) fetch the matrix
-        if layer_name is None:
-            input_layer = adata.X
-        else:
-            input_layer = adata.layers[layer_name]
+        unspliced_layer = adata.layers[REGISTRY_KEYS.UNSPLICED_KEY]
+        spliced_layer = adata.layers[REGISTRY_KEYS.SPLICED_KEY]
 
         # 4) now instantiate your module, forwarding the new arguments
         self.module = self._module_cls(
-            n_input=self.summary_stats.n_vars,
+            n_input=adata.shape[1],#self.summary_stats.n_vars,
             n_batch=n_batch,
             n_hidden=n_hidden,
             n_latent=n_latent,
@@ -79,13 +70,13 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
             library_log_means=library_log_means,
             library_log_vars=library_log_vars,
             mask=mask,
-            # ▶ NEW:
-            input_layer=input_layer,
+            unspliced_layer=unspliced_layer,
+            spliced_layer=spliced_layer,
             K=K,
             **model_kwargs,
         )
         
-        data_for_fit = adata.obsm["X_pca"]
+        data_for_fit = spliced_layer
         nbrs = NearestNeighbors(n_neighbors=K + 1, metric="euclidean")
         nbrs.fit(data_for_fit)
         _, all_idxs = nbrs.kneighbors(data_for_fit)
@@ -104,7 +95,6 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         )
         self.n_latent = n_latent
         self.init_params_ = self._get_init_params(locals())
-
 
     def get_loadings(self) -> pd.DataFrame:
         """Extract per-gene weights in the linear decoder.
@@ -126,7 +116,8 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         adata: AnnData,
         batch_key: str | None = None,
         labels_key: str | None = None,
-        layer: str | None = None,
+        unspliced_key: str | None = None,
+        spliced_key: str | None = None,
         **kwargs,
     ):
         """%(summary)s.
@@ -141,7 +132,9 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         adata.obs["_scvi_cell_index"] = np.arange(adata.n_obs, dtype=int)
         setup_method_args = cls._get_setup_method_args(**locals())
         anndata_fields = [
-            LayerField(REGISTRY_KEYS.X_KEY, layer, is_count_data=False),
+            LayerField(REGISTRY_KEYS.UNSPLICED_KEY, unspliced_key, is_count_data=False),
+            LayerField(REGISTRY_KEYS.SPLICED_KEY, spliced_key, is_count_data=False),
+            LayerField(REGISTRY_KEYS.X_KEY, spliced_key, is_count_data=False),
             CategoricalObsField(REGISTRY_KEYS.BATCH_KEY, batch_key),
             CategoricalObsField(REGISTRY_KEYS.LABELS_KEY, labels_key),
             NumericalObsField(REGISTRY_KEYS.INDICES_KEY, "_scvi_cell_index"),

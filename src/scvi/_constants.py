@@ -3,6 +3,8 @@ from typing import NamedTuple
 
 class _REGISTRY_KEYS_NT(NamedTuple):
     X_KEY: str = "X"
+    UNSPLICED_KEY = "unspliced"
+    SPLICED_KEY = "spliced"
     ATAC_X_KEY: str = "atac"
     BATCH_KEY: str = "batch"
     SAMPLE_KEY: str = "sample"

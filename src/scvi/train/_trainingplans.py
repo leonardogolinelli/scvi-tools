@@ -557,58 +557,6 @@ class TwoPhaseTrainingPlan(TrainingPlan):
 
             self.log("phase", torch.tensor(2.0), prog_bar=True)
 
-    """def training_step(self, batch, batch_idx):
-        if not self._in_phase_two:
-            return super().training_step(batch, batch_idx)
-
-        inf_out, gen_out = self.module(
-            batch,
-            compute_loss=False,
-            get_inference_input_kwargs={"full_forward_pass": not self.update_only_decoder},
-        )
-        x    = batch[REGISTRY_KEYS.X_KEY]
-        idxs = batch[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
-        vel  = gen_out[MODULE_KEYS.VELOCITY_KEY]
-        velo_loss = self.module._velocity_loss(vel, x, idxs)
-
-        # only log as train_loss
-        self.log(
-            "train_loss",
-            velo_loss,
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            sync_dist=self.use_sync_dist,
-        )
-        return velo_loss"""
-
-
-    def validation_step(self, batch, batch_idx):
-        # Phase 1: regular validation
-        if not self._in_phase_two:
-            return super().validation_step(batch, batch_idx)
-
-        # Phase 2: velocity‐only validation
-        inf_out, gen_out = self.module(
-            batch,
-            compute_loss=False,
-            get_inference_input_kwargs={"full_forward_pass": not self.update_only_decoder},
-        )
-        x = batch[REGISTRY_KEYS.X_KEY]
-        idxs = batch[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
-        vel = gen_out[MODULE_KEYS.VELOCITY_KEY]
-        velo_loss = self.module._velocity_loss(vel, x, idxs)
-        self.log(
-            "velocity_loss_validation",
-            velo_loss,
-            on_step=False,
-            on_epoch=True,
-            sync_dist=self.use_sync_dist,
-        )
-
-    def configure_optimizers(self):
-        # optimizer will only pick up the now‐unfrozen velocity params in phase 2
-        return super().configure_optimizers()
 
     
 

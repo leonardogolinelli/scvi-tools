@@ -3,6 +3,8 @@ from typing import NamedTuple
 
 class _MODULE_KEYS(NamedTuple):
     X_KEY: str = "x"
+    SPLICED_KEY: str = "spliced"
+    UNSPLICED_KEY: str = "unspliced"
     # inference
     Z_KEY: str = "z"
     QZ_KEY: str = "qz"

@@ -507,7 +507,7 @@ class MaskedLinearDecoder(nn.Module):
         # 2) build your normal 1-layer FCLayers that outputs 2*n_output units
         self.normal_decoder = FCLayers(
             n_in=n_input,
-            n_out=2 * n_output,
+            n_out=n_output,
             n_cat_list=n_cat_list,
             n_layers=1,
             use_activation=False,
@@ -528,6 +528,7 @@ class MaskedLinearDecoder(nn.Module):
 
         # 4) zero out masked positions at init
         with torch.no_grad():
+            print(self.linear.weight.shape, self.mask.shape)
             self.linear.weight.mul_(self.mask)
 
     def forward(self, dispersion: str, z: torch.Tensor, library: torch.Tensor, *cat_list: int):
@@ -592,8 +593,8 @@ class VelocityDecoder(nn.Module):
         )
 
         self.params_decoder = nn.Sequential(
-                nn.Linear(n_hidden, 3*n_output),
-                nn.ReLU(dim=-1),
+                nn.Linear(n_hidden, n_output),
+                #nn.ReLU(),
         )
 
     def forward(self, z: torch.Tensor, x: torch.Tensor):
@@ -616,30 +617,15 @@ class VelocityDecoder(nn.Module):
 
         """
 
-        """with torch.no_grad():
-            noise = torch.randn_like(x) * 0.01
-
-        x += noise"""
-
         # Parameters for latent distribution
         p = self.decoder(z)
-        params = self.velocity_decoder(p) 
+        params = self.params_decoder(p) 
         alpha, beta, gamma = torch.tensor_split(params, 3, dim=-1)
         u, s = torch.tensor_split(x, 2, dim=-1)
         velocity_u = alpha - beta * u
         velocity = beta * u - gamma * s
 
         velocity_concat = torch.cat((velocity_u, velocity), dim=-1)
-
-        #gp_velocity = self.gp_velo_decoder(p)
-
-        """if not kinetic_params:
-            velocity = self.velocity_decoder(p)
-
-        else:
-            #alpha, beta, gamma = ...
-            #velocity = ...
-            #velocity_u = ..."""
 
         return velocity_concat
 

@@ -398,7 +398,6 @@ def _init_library_size(
 
     return library_log_means.reshape(1, -1), library_log_vars.reshape(1, -1)
 
-
 def _get_var_names_from_manager(
     adata_manager: AnnDataManager, registry_key: str = REGISTRY_KEYS.X_KEY
 ) -> np.ndarray:
