@@ -505,7 +505,7 @@ class MaskedLinearDecoder(nn.Module):
         self.register_buffer("mask", mask)
 
         # 2) build your normal 1-layer FCLayers that outputs 2*n_output units
-        self.normal_decoder = FCLayers(
+        self.mean_decoder = FCLayers(
             n_in=n_input,
             n_out=n_output,
             n_cat_list=n_cat_list,
@@ -519,7 +519,7 @@ class MaskedLinearDecoder(nn.Module):
         )
 
         # 3) pull out the single Linear inside that FCLayers
-        for m in self.normal_decoder.fc_layers[0]:
+        for m in self.mean_decoder.fc_layers[0]:
             if isinstance(m, nn.Linear):
                 self.linear = m
                 break
@@ -531,18 +531,17 @@ class MaskedLinearDecoder(nn.Module):
             print(self.linear.weight.shape, self.mask.shape)
             self.linear.weight.mul_(self.mask)
 
-    def forward(self, dispersion: str, z: torch.Tensor, library: torch.Tensor, *cat_list: int):
+    def forward(self, z: torch.Tensor, library: torch.Tensor, *cat_list: int):
         # 5) re-apply mask on every forward under no_grad
         with torch.no_grad():
             self.linear.weight.mul_(self.mask)
 
         # 6) proceed as before
-        out = self.normal_decoder(z, *cat_list)
-        raw_px_scale, px_r = out.split(out.size(-1) // 2, dim=-1)
-        px_scale = torch.softmax(raw_px_scale, dim=-1)
-        px_rate = torch.exp(library) * px_scale
-        px_dropout = None
-        return px_scale, px_r, px_rate, px_dropout
+        raw_mean = self.normal_decoder(z, *cat_list)
+        raw_mean = torch.softmax(raw_mean, dim=-1)
+        mean = torch.exp(library) * raw_mean
+
+        return mean, raw_mean
     
 class VelocityDecoder(nn.Module):
     """Decodes data from latent space to data space.

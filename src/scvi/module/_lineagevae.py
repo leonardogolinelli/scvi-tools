@@ -16,6 +16,8 @@ from scvi.module.base import (
     auto_move_data,
 )
 from scvi.utils import unsupported_if_adata_minified
+from torch.nn.functional import one_hot
+
 
 import torch.nn.functional as F
 
@@ -176,34 +178,105 @@ class LINEAGEVAE(VAE):
         # and inject it under the name your generative() expects:
         gen_inputs[MODULE_KEYS.X_KEY] = x
         return gen_inputs
-    
+
+
     @auto_move_data
-    def generative(self,
-                   x,           # <-- will now get the x you just inserted
-                   z,
-                   library,
-                   batch_index,
-                   cont_covs=None,
-                   cat_covs=None,
-                   size_factor=None,
-                   y=None,
-                   transform_batch=None,
-    ):
-        # call the parent to get everything but 'x'
-        outputs = super().generative(
-            z,
-            library,
-            batch_index,
-            cont_covs=cont_covs,
-            cat_covs=cat_covs,
-            size_factor=size_factor,
-            y=y,
-            transform_batch=transform_batch,
+    def generative(
+        self,
+        x: torch.Tensor,
+        z: torch.Tensor,
+        library: torch.Tensor,
+        batch_index: torch.Tensor,
+        cont_covs: torch.Tensor | None = None,
+        cat_covs: torch.Tensor | None = None,
+        size_factor: torch.Tensor | None = None,
+        y: torch.Tensor | None = None,
+        transform_batch: torch.Tensor | None = None,
+    ) -> dict[str, Distribution | None]:
+        """Run the generative process."""
+        from torch.nn.functional import linear
+
+        from scvi.distributions import (
+            NegativeBinomial,
+            Normal,
+            Poisson,
+            ZeroInflatedNegativeBinomial,
         )
+
+        # TODO: refactor forward function to not rely on y
+        # Likelihood distribution
+        if cont_covs is None:
+            decoder_input = z
+        elif z.dim() != cont_covs.dim():
+            decoder_input = torch.cat(
+                [z, cont_covs.unsqueeze(0).expand(z.size(0), -1, -1)], dim=-1
+            )
+        else:
+            decoder_input = torch.cat([z, cont_covs], dim=-1)
+
+        if cat_covs is not None:
+            categorical_input = torch.split(cat_covs, 1, dim=1)
+        else:
+            categorical_input = ()
+
+        if transform_batch is not None:
+            batch_index = torch.ones_like(batch_index) * transform_batch
+
+        if not self.use_size_factor_key:
+            size_factor = library
+
+        if self.batch_representation == "embedding":
+            batch_rep = self.compute_embedding(REGISTRY_KEYS.BATCH_KEY, batch_index)
+            decoder_input = torch.cat([decoder_input, batch_rep], dim=-1)
+            px_rate, px_scale = self.decoder(
+                decoder_input,
+                size_factor,
+                *categorical_input,
+                y,
+            )
+        else:
+            px_rate, px_scale = self.decoder(
+                decoder_input,
+                size_factor,
+                batch_index,
+                *categorical_input,
+                y,
+            )
+
+        if self.dispersion == "gene-label":
+            px_r = linear(
+                one_hot(y.squeeze(-1), self.n_labels).float(), self.px_r
+            )  # px_r gets transposed - last dimension is nb genes
+        elif self.dispersion == "gene-batch":
+            px_r = linear(one_hot(batch_index.squeeze(-1), self.n_batch).float(), self.px_r)
+        elif self.dispersion == "gene":
+            px_r = self.px_r
+
+        px_r = torch.exp(px_r)
+
+        px = Normal(px_rate, px_r, normal_mu=px_scale)
+
+        # Priors
+        if self.use_observed_lib_size:
+            pl = None
+        else:
+            (
+                local_library_log_means,
+                local_library_log_vars,
+            ) = self._compute_local_library_params(batch_index)
+            pl = Normal(local_library_log_means, local_library_log_vars.sqrt())
+        pz = Normal(torch.zeros_like(z), torch.ones_like(z))
+
         # now you can use x however you like
         velo = self.velo_decoder(z, x)
-        outputs[MODULE_KEYS.VELOCITY_KEY] = velo
-        return outputs
+
+        return {
+            MODULE_KEYS.PX_KEY: px,
+            MODULE_KEYS.PL_KEY: pl,
+            MODULE_KEYS.PZ_KEY: pz,
+            MODULE_KEYS.VELOCITY_KEY: velo,
+        }
+    
 
     def _velocity_loss(
         self,
