@@ -608,6 +608,7 @@ class VelocityDecoder(nn.Module):
         self.nn = None
         self.pn = None
         self.np = None
+        self.p_sign = None
 
     def forward(self, z: torch.Tensor, x: torch.Tensor):
         """The forward computation for a single sample.
@@ -632,13 +633,13 @@ class VelocityDecoder(nn.Module):
         # Parameters for latent distribution
         p = self.decoder(z)
         params = self.parameters_decoder(p)
-        p_sign = self.uncertainty_decoder(p)
-        p_sign = p_sign.view(-1, self.uncertainty_output//4, 4)
-        p_sign = F.softmax(p_sign, dim=-1)
-        self.pp = p_sign[:,:,0]
-        self.nn = p_sign[:,:,1]
-        self.pn = p_sign[:,:,2]
-        self.np = p_sign[:,:,3]
+        self.p_sign = self.uncertainty_decoder(p)
+        self.p_sign = self.p_sign.view(-1, self.uncertainty_output//4, 4)
+        self.p_sign = F.softmax(self.p_sign, dim=-1)
+        self.pp = self.p_sign[:,:,0]
+        self.nn = self.p_sign[:,:,1]
+        self.pn = self.p_sign[:,:,2]
+        self.np = self.p_sign[:,:,3]
         alpha, beta, gamma = torch.tensor_split(params, 3, dim=-1)
         u, s = torch.tensor_split(x, 2, dim=-1)
         u_rate_pos = alpha - beta * u
