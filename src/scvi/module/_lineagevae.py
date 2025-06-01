@@ -89,11 +89,14 @@ class LINEAGEVAE(VAE):
         self.K = K
         self.velocity_loss_weight = velocity_loss_weight
         self.phase = 1
+        self.px_r = torch.nn.Parameter(torch.randn(2*n_input))
+
+
 
         self.use_batch_norm = use_batch_norm
         # encoders
         self.z_encoder = Encoder(
-            n_input,
+            2*n_input,
             n_latent,
             n_layers=n_layers_encoder,
             n_hidden=n_hidden,
@@ -105,7 +108,7 @@ class LINEAGEVAE(VAE):
         )
 
         self.l_encoder = Encoder(
-            n_input,
+            2*n_input,
             1,
             n_layers=1,
             n_hidden=n_hidden,
@@ -154,9 +157,13 @@ class LINEAGEVAE(VAE):
         else:
             raise NotImplementedError(f"Unknown minified-data type: {self.minified_data_type}")
 
+        u = tensors[REGISTRY_KEYS.UNSPLICED_KEY]
+        s = tensors[REGISTRY_KEYS.SPLICED_KEY]
+        x = torch.cat([u, s], dim=1)
+        
         if loader == "full_data":
             return {
-                MODULE_KEYS.X_KEY: tensors[REGISTRY_KEYS.SPLICED_KEY],
+                MODULE_KEYS.X_KEY: x,
                 MODULE_KEYS.BATCH_INDEX_KEY: tensors[REGISTRY_KEYS.BATCH_KEY],
                 MODULE_KEYS.CONT_COVS_KEY: tensors.get(REGISTRY_KEYS.CONT_COVS_KEY, None),
                 MODULE_KEYS.CAT_COVS_KEY: tensors.get(REGISTRY_KEYS.CAT_COVS_KEY, None),
@@ -254,6 +261,8 @@ class LINEAGEVAE(VAE):
 
         px_r = torch.exp(px_r)
 
+        print(f"px_rate shape: {px_rate.shape}, px_scale shape: {px_scale.shape}, px_r shape: {px_r.shape}")
+
         px = Normal(px_rate, px_r, normal_mu=px_scale)
 
         # Priors
@@ -300,8 +309,86 @@ class LINEAGEVAE(VAE):
         cos_sim = F.cosine_similarity(diffs, velocity_pred.unsqueeze(1), dim=-1)  # (B,K)
         max_sim, _ = cos_sim.max(dim=1)                      # (B,)
         return (1.0 - max_sim).mean()
+    
 
+    @unsupported_if_adata_minified
     def loss(
+        self,
+        tensors: dict[str, torch.Tensor],
+        inference_outputs: dict[str, torch.Tensor | Distribution | None],
+        generative_outputs: dict[str, Distribution | None],
+        kl_weight: torch.tensor | float = 1.0,
+    ) -> LossOutput:
+        if self.phase == 1:
+            """Compute the loss."""
+            from torch.distributions import kl_divergence
+
+            u = tensors[REGISTRY_KEYS.UNSPLICED_KEY]
+            s = tensors[REGISTRY_KEYS.SPLICED_KEY]
+            x = torch.cat([u, s], dim=1)
+            kl_divergence_z = kl_divergence(
+                inference_outputs[MODULE_KEYS.QZ_KEY], generative_outputs[MODULE_KEYS.PZ_KEY]
+            ).sum(dim=-1)
+            if not self.use_observed_lib_size:
+                kl_divergence_l = kl_divergence(
+                    inference_outputs[MODULE_KEYS.QL_KEY], generative_outputs[MODULE_KEYS.PL_KEY]
+                ).sum(dim=1)
+            else:
+                kl_divergence_l = torch.zeros_like(kl_divergence_z)
+            print("ciao")
+            print(x.shape)
+            reconst_loss = -generative_outputs[MODULE_KEYS.PX_KEY].log_prob(x).sum(-1)
+
+            kl_local_for_warmup = kl_divergence_z
+            kl_local_no_warmup = kl_divergence_l
+
+            weighted_kl_local = kl_weight * kl_local_for_warmup + kl_local_no_warmup
+
+            loss = torch.mean(reconst_loss + weighted_kl_local)
+
+            # a payload to be used during autotune
+            if self.extra_payload_autotune:
+                extra_metrics_payload = {
+                    "z": inference_outputs["z"],
+                    "batch": tensors[REGISTRY_KEYS.BATCH_KEY],
+                    "labels": tensors[REGISTRY_KEYS.LABELS_KEY],
+                }
+            else:
+                extra_metrics_payload = {}
+
+            return LossOutput(
+                loss=loss,
+                reconstruction_loss=reconst_loss,
+                kl_local={
+                    MODULE_KEYS.KL_L_KEY: kl_divergence_l,
+                    MODULE_KEYS.KL_Z_KEY: kl_divergence_z,
+                },
+                extra_metrics=extra_metrics_payload,
+            )
+        
+        else:
+            vel = generative_outputs[MODULE_KEYS.VELOCITY_KEY]
+            unspliced = tensors[REGISTRY_KEYS.UNSPLICED_KEY]
+            spliced = tensors[REGISTRY_KEYS.SPLICED_KEY]
+            u_s = torch.cat([unspliced, spliced], dim=1)  # (B, G*2)
+            idx = tensors[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
+
+            # compute just the velocity‐only loss
+            velo_loss = self._velocity_loss(vel, u_s, idx)
+
+            zeros = torch.zeros(unspliced.shape[0], device=velo_loss.device)
+
+            # return a “pure” velocity LossOutput
+            return LossOutput(
+                loss=velo_loss,
+                # zeros for all the ELBO bits so metrics see nothing
+                reconstruction_loss=zeros,
+                kl_local=zeros,
+                extra_metrics={"velocity_loss": velo_loss},
+            )
+
+
+    """def loss(
         self,
         tensors: dict[str, torch.Tensor],
         inference_outputs: dict[str, torch.Tensor | Distribution | None],
@@ -337,7 +424,7 @@ class LINEAGEVAE(VAE):
             reconstruction_loss=zeros,
             kl_local=zeros,
             extra_metrics={"velocity_loss": velo_loss},
-        )
+        )"""
 
     @torch.inference_mode()
     def get_loadings(self) -> np.ndarray:

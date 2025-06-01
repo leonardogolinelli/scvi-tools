@@ -300,6 +300,8 @@ class Encoder(nn.Module):
 
         """
         # Parameters for latent distribution
+        print("x shape")
+        print(x.shape)
         q = self.encoder(x, *cat_list)
         q_m = self.mean_encoder(q)
         q_v = self.var_activation(self.var_encoder(q)) + self.var_eps
@@ -537,7 +539,7 @@ class MaskedLinearDecoder(nn.Module):
             self.linear.weight.mul_(self.mask)
 
         # 6) proceed as before
-        raw_mean = self.normal_decoder(z, *cat_list)
+        raw_mean = self.mean_decoder(z, *cat_list)
         raw_mean = torch.softmax(raw_mean, dim=-1)
         mean = torch.exp(library) * raw_mean
 
