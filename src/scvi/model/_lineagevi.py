@@ -372,4 +372,91 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         extrapolated_cells = np.stack(extrapolated_cells_list)
         df, _ = self._compute_directional_statistics_tensor(extrapolated_cells, n_jobs=n_jobs, n_cells=self.adata.n_obs)
         return df
+    
+
+    @torch.inference_mode()
+    def get_latent_representation(
+        self,
+        adata=None,
+        indices=None,
+        give_mean=True,
+        mc_samples: int = 5_000,
+        batch_size: int | None = None,
+        return_dist: bool = False,
+        dataloader: Iterator[dict[str, Tensor | None]] = None,
+        active_gps: bool = False,
+    ):
+        # … (same as before up through collecting all_means/all_vars or all_z) …
+
+        if return_dist:
+            all_means, all_vars = super().get_latent_representation(
+                adata=adata,
+                indices=indices,
+                give_mean=give_mean,
+                mc_samples=mc_samples,
+                batch_size=batch_size,
+                return_dist=True,
+                dataloader=dataloader,
+            )
+            if not active_gps:
+                return all_means, all_vars
+
+            # ─────────── re‑apply mask before computing norms ───────────
+            W = self.decoder.linear.weight       # shape: (n_out, n_latent)
+            W_masked = W * self.decoder.mask     # ensure masked entries are zero
+            col_norms = W_masked.norm(dim=0).cpu().numpy()  # (n_latent,)
+            active_mask = col_norms > 0.0
+            # ──────────────────────────────────────────────────────────────
+
+            active_indices = list(np.nonzero(active_mask)[0])
+            all_names = [f"GP{i}" for i in range(W.shape[1])]
+            active_names = [all_names[i] for i in active_indices]
+
+            if adata is not None:
+                adata.uns["active_gp_indices"] = active_indices
+                adata.uns["active_gp_names"] = active_names
+                print(
+                    "Stored active GP indices in adata.uns['active_gp_indices'] "
+                    "and names in adata.uns['active_gp_names']"
+                )
+
+            active_means = all_means[:, active_mask]
+            active_vars = all_vars[:, active_mask]
+            return active_means, active_vars
+
+        else:
+            all_z = super().get_latent_representation(
+                adata=adata,
+                indices=indices,
+                give_mean=give_mean,
+                mc_samples=mc_samples,
+                batch_size=batch_size,
+                return_dist=False,
+                dataloader=dataloader,
+            )
+            if not active_gps:
+                return all_z
+
+            # ─────────── re‑apply mask before computing norms ───────────
+            W = self.module.decoder.linear.weight       # shape: (n_out, n_latent)
+            W_masked = W * self.module.decoder.mask     # ensure masked entries are zero
+            col_norms = W_masked.norm(dim=0).cpu().numpy()  # (n_latent,)
+            active_mask = col_norms > 0.0
+            # ──────────────────────────────────────────────────────────────
+
+            active_indices = list(np.nonzero(active_mask)[0])
+            all_names = [f"GP{i}" for i in range(W.shape[1])]
+            active_names = [all_names[i] for i in active_indices]
+
+            if adata is not None:
+                adata.uns["active_gp_indices"] = active_indices
+                adata.uns["active_gp_names"] = active_names
+                print(
+                    "Stored active GP indices in adata.uns['active_gp_indices'] "
+                    "and names in adata.uns['active_gp_names']"
+                )
+
+            return all_z[:, active_mask]
+
+
 

@@ -519,7 +519,6 @@ class TrainingPlan(pl.LightningModule):
             klw if type(self).__name__ == "JaxTrainingPlan" else torch.tensor(klw).to(self.device)
         )
 
-
 class TwoPhaseTrainingPlan(TrainingPlan):
     def __init__(self, module, *, first_phase_epochs=100, **kwargs):
         kwargs["n_epochs_kl_warmup"] = first_phase_epochs
@@ -528,34 +527,99 @@ class TwoPhaseTrainingPlan(TrainingPlan):
         self._in_phase_two = False
         self.module.phase = 1
 
+        # Disable Lightning's automatic optimization
+        self.automatic_optimization = False
+
     def on_train_start(self):
         print("\n[Phase 1] Parameter requires_grad status:")
-
         for name, param in self.module.named_parameters():
             if name.startswith("velo_decoder"):
                 param.requires_grad = False
             else:
                 param.requires_grad = True
 
-        #for name, param in self.module.named_parameters():
-        #    print(f"{name}: {param.requires_grad}")
-
     def on_train_epoch_start(self):
-        # Switch to phase 2 at the right epoch
+        # Switch to Phase 2 at the right epoch
         if not self._in_phase_two and self.current_epoch >= self.first_phase_epochs:
             self._in_phase_two = True
             self.module.phase = 2
-            # Unfreeze velocity decoder, freeze others
+            # Unfreeze velocity decoder, freeze all others
             for name, param in self.module.named_parameters():
                 if name.startswith("velo_decoder"):
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
             print("\n[Phase 2] Parameter requires_grad status:")
-            #for name, param in self.module.named_parameters():
-            #    print(f"{name}: {param.requires_grad}")
-
             self.log("phase", torch.tensor(2.0), prog_bar=True)
+
+    def training_step(self, batch, batch_idx):
+        """
+        We override training_step to perform manual optimization:
+          1) zero_grad
+          2) forward → compute loss
+          3) backward
+          4) step optimizer
+          5) apply prox‐gradient on decoder if phase = 1
+        """
+        # 1) Grab the single optimizer we created in configure_optimizers
+        optimizer = self.optimizers()
+
+        # 2) Zero gradients
+        optimizer.zero_grad()
+
+        # 3) Compute scVI loss
+        if "kl_weight" in self.loss_kwargs:
+            kl_weight = self.kl_weight
+            self.loss_kwargs.update({"kl_weight": kl_weight})
+            self.log("kl_weight", kl_weight, on_step=True, on_epoch=False)
+        _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
+        loss = scvi_loss.loss
+
+        # 4) Backward
+        self.manual_backward(loss)
+
+        # 5) Step the optimizer
+        optimizer.step()
+
+        # 6) Immediately apply group‐lasso proximal update on decoder if in Phase 1
+        if self.module.phase == 1:
+            lr = self.lr  # same learning rate you configured
+            self.module._apply_group_lasso_prox(lr)
+
+        # 7) Log training metrics exactly as before
+        self.log(
+            "train_loss",
+            loss,
+            on_epoch=True,
+            prog_bar=True,
+            sync_dist=self.use_sync_dist,
+            batch_size=scvi_loss.n_obs_minibatch,
+        )
+        self.compute_and_log_metrics(scvi_loss, self.train_metrics, "train")
+
+        # 8) For scIB autotuning (unchanged)
+        if scvi_loss.extra_metrics is not None and len(scvi_loss.extra_metrics.keys()) > 0:
+            self.prepare_scib_autotune(scvi_loss.extra_metrics, "training")
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        """Validation step remains identical to before."""
+        _, _, scvi_loss = self.forward(batch, loss_kwargs=self.loss_kwargs)
+        self.log(
+            "validation_loss",
+            scvi_loss.loss,
+            on_epoch=True,
+            sync_dist=self.use_sync_dist,
+            batch_size=scvi_loss.n_obs_minibatch,
+        )
+        self.compute_and_log_metrics(scvi_loss, self.val_metrics, "validation")
+        if scvi_loss.extra_metrics is not None and len(scvi_loss.extra_metrics.keys()) > 0:
+            self.prepare_scib_autotune(scvi_loss.extra_metrics, "validation")
+
+    # configure_optimizers stays exactly the same as before
+
+
 
 
     

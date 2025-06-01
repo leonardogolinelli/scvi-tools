@@ -15,7 +15,9 @@ from scvi.module.base import (
     LossOutput,
     auto_move_data,
 )
-from scvi.utils import unsupported_if_adata_minified
+from collections.abc import Iterator
+from torch import Tensor
+
 
 import torch.nn.functional as F
 
@@ -45,6 +47,7 @@ class LINEAGEVAE(VAE):
         spliced_layer: np.ndarray | None = None,
         K: int = 10,
         velocity_loss_weight: float = 1.0,
+        alpha: float = .1,  # group lasso regularization strength
         **kwargs,
     ):
         super().__init__(
@@ -89,6 +92,9 @@ class LINEAGEVAE(VAE):
         self.phase = 1
 
         self.use_batch_norm = use_batch_norm
+
+        self.alpha = alpha  
+        
         # encoders
         self.z_encoder = Encoder(
             n_input,
@@ -265,22 +271,37 @@ class LINEAGEVAE(VAE):
             kl_local=zeros,
             extra_metrics={"velocity_loss": velo_loss},
         )
+    
+    def _apply_group_lasso_prox(self, lr: float) -> None:
+        """
+        After a standard optimizer.step(), call this to apply the proximal operator
+        that enforces group‐lasso on each column of the decoder weights,
+        but first re‐apply the hard mask for safety.
+        
+        lr: the learning rate used in optimizer.step() (must match!).
+        """
+        with torch.no_grad():
+            # 1) Grab the raw weight tensor and re‐apply the hard mask:
+            #    'decoder.linear' is the nn.Linear inside normal_decoder.fc_layers[0].
+            W = self.decoder.linear.weight    # shape: (n_output, n_latent)
+            W.mul_(self.decoder.mask)         # re‐zero any masked entries
 
-    @torch.inference_mode()
-    def get_loadings(self) -> np.ndarray:
-        """Extract per-gene weights in the linear decoder."""
-        if self.use_batch_norm:
-            # With batch norm: B W
-            w = self.decoder.factor_regressor.fc_layers[0][0].weight
-            bn = self.decoder.factor_regressor.fc_layers[0][1]
-            sigma = torch.sqrt(bn.running_var + bn.eps)
-            gamma = bn.weight
-            b = gamma / sigma
-            loadings = torch.diag(b) @ w
-        else:
-            loadings = self.decoder.factor_regressor.fc_layers[0][0].weight
-        loadings = loadings.detach().cpu().numpy()
-        # if batches were concatenated in mask, slice them off
-        if self.n_batch > 1:
-            loadings = loadings[:, :-self.n_batch]
-        return loadings
+            # 2) Now perform a column‐wise group‐lasso proximal update:
+            alpha = self.alpha
+            for k in range(W.shape[1]):
+                col = W[:, k]                # shape: (n_output,)
+                norm_col = col.norm(p=2)
+                thresh = alpha * lr
+                if norm_col <= thresh:
+                    # zero out the entire column
+                    col.zero_()
+                else:
+                    # shrink the column by (‖col‖₂ - thresh) / ‖col‖₂
+                    shrink = (norm_col - thresh) / norm_col
+                    col.mul_(shrink)
+
+            # 3) (Optional) Ensure mask is still enforced in case any tiny floating‐point
+            #    noise re‐introduced nonzero entries at masked locations:
+            W.mul_(self.decoder.mask)
+
+
