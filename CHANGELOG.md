@@ -10,11 +10,17 @@ to [Semantic Versioning]. Full commit history is available in the
 
 #### Added
 
-- Added getting protein probabilities in multivi {pr}`3341`.
+- Added posterior predictive samples batch projection. {pr}`3369`.
+- Added getting protein probabilities in {class}`~scvi.model.MULTIVI` {pr}`3341`.
+- Add {class}`scvi.external.SCVIVA` for representation of cells and their environments in spatial
+    transcriptomics {pr}`3172`.
+- Add support for Python 3.13 {pr}`3247`.
 
 #### Fixed
 
-- Fix bug in TOTALANVI scarches. {pr}`3355`.
+- Fix bug in {class}`scvi.external.TOTALANVI` scarches. {pr}`3355`.
+- Fix bug in {class}`scvi.external.MRVI` down stream analysis use of external adata. {pr}`3324`.
+- Fix bug in perplexity calculation in {class}`scvi.model.AmortizedLDA`. {pr}`3373`.
 
 #### Changed
 
