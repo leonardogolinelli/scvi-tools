@@ -45,6 +45,7 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         dispersion: Literal["gene", "gene-batch", "gene-label", "gene-cell"] = "gene",
         gene_likelihood: Literal["normal"] = "normal",
         latent_distribution: Literal["normal", "ln"] = "normal",
+        alpha: float = 0.1,
         **model_kwargs,
     ):
         super().__init__(adata)
@@ -78,6 +79,7 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
             unspliced_layer=unspliced_layer,
             spliced_layer=spliced_layer,
             K=K,
+            alpha=alpha,  # ← NEW: alpha for the KNN graph
             **model_kwargs,
         )
         
@@ -260,9 +262,9 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
 
         velos = final.numpy()
 
-        velocity, velocity_u = np.split(velos, 2, axis=-1)
+        velocity_u, velocity = np.split(velos, 2, axis=-1)
         
-        return velocity, velocity_u
+        return velocity_u, velocity
     
     @torch.inference_mode()
     def get_directional_uncertainty(
