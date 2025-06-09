@@ -86,12 +86,14 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         )
         
         data_for_fit = spliced_layer
-        nbrs = NearestNeighbors(n_neighbors=K + 1, metric="euclidean")
-        nbrs.fit(data_for_fit)
-        _, all_idxs = nbrs.kneighbors(data_for_fit)
+        #nbrs = NearestNeighbors(n_neighbors=K + 1, metric="euclidean")
+        #nbrs.fit(data_for_fit)
+        #_, all_idxs = nbrs.kneighbors(data_for_fit)
 
         # 3) slice off the self-index and keep only K neighbors
-        nn_idx = all_idxs[:, 1 : K + 1]  # shape (n_cells, K)
+        #nn_idx = all_idxs[:, 1 : K + 1]  # shape (n_cells, K)
+
+        nn_idx = self.adata.uns['indices']
 
         # 4) register on the module so it lands on GPU
         self.module.register_buffer("nn_indices", torch.from_numpy(nn_idx).long())
@@ -910,7 +912,8 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
 
         return fig
 
-    def add_annotations(self, files, min_genes=0, max_genes=None, varm_key='I', uns_key='terms',
+    @staticmethod
+    def add_annotations(adata, files, min_genes=0, max_genes=None, varm_key='I', uns_key='terms',
                     clean=True, genes_use_upper=True):
         """\
         Add annotations to an AnnData object from files.
@@ -939,8 +942,6 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         genes_use_upper
             if 'True', converts genes' names from files and adata to uppercase for comparison.
         """
-
-        adata = self.adata
         
         files = [files] if isinstance(files, str) else files
         annot = []
@@ -964,6 +965,178 @@ class LINEAGEVI(RNASeqMixin, VAEMixin, TwoPhaseTrainingMixin, BaseModelClass):
         I = I[:, mask]
         adata.varm[varm_key] = I
         adata.uns[uns_key] = [term[0] for i, term in enumerate(annot) if i not in np.where(~mask)[0]]
+
+
+    @staticmethod
+    def compute_nn_matrix(adata, key, n_neighbors):
+        from sklearn.neighbors import NearestNeighbors
+        """
+        Compute the nearest neighbors matrix from a precomputed distance matrix.
+
+        Parameters:
+        - adata: AnnData object with a square distance matrix in adata.obsp[key].
+        - key: Key to access the distance matrix in adata.obsp.
+        - n_neighbors: Number of nearest neighbors to compute.
+
+        Stores:
+        - adata.uns['indices']: array of neighbor indices (excluding self).
+        - adata.uns['distances']: array of corresponding distances.
+        """
+        matrix = adata.obsp[key]
+
+        nbrs = NearestNeighbors(n_neighbors=n_neighbors + 1, metric='precomputed')
+        nbrs.fit(matrix)
+        distances, indices = nbrs.kneighbors(matrix)
+
+        # Drop self-neighbor (first column)
+        adata.uns["indices"] = indices[:, 1:]
+        adata.uns["distances"] = distances[:, 1:]
+
+
+    @staticmethod
+    def compute_nn_from_connectivity(adata, key, n_neighbors):
+        """
+        Pick the top-n_neighbors nearest neighbors based on a precomputed connectivity matrix.
+
+        Parameters
+        ----------
+        adata
+            AnnData object with a connectivity matrix in adata.obsp[key].
+        key : str
+            Which connectivity matrix to use (e.g. 'connectivities').
+        n_neighbors : int
+            How many neighbors to pick per cell.
+
+        Stores
+        ------
+        adata.uns['indices']
+            Array of shape (n_cells, n_neighbors) with neighbor indices.
+        adata.uns['weights']
+            Array of shape (n_cells, n_neighbors) with their connectivity weights.
+        """
+        from scipy.sparse import issparse
+        # 1) pull out dense matrix
+        conn = adata.obsp[key]
+        if issparse(conn):
+            conn = conn.toarray()
+
+        # 2) mask out self-connections so they won’t sort to the top
+        #    (assumes diagonal was 1 or max; set to -inf to drop it)
+        np.fill_diagonal(conn, -np.inf)
+
+        # 3) sort each row descending, take first n_neighbors
+        #    argsort gives ascending, so negate to get descending
+        idx = np.argsort(-conn, axis=1)[:, :n_neighbors]
+        weights = np.take_along_axis(conn, idx, axis=1)
+
+        adata.uns['indices'] = idx
+        adata.uns['weights'] = weights
+
+
+    @staticmethod
+    def plot_phase_plane(adata, gene_name, u_scale=.01, s_scale=0.01, alpha=0.5, head_width=0.02, head_length=0.03, length_includes_head=False, log=False,
+                            norm_velocity=True, filter_cells=False, smooth_expr=True, show_plot=True, save_plot=True, save_path=".",
+                            cell_type_key="clusters",title_fontsize=16, axis_fontsize=14, legend_fontsize=14, tick_fontsize=12):
+
+        if smooth_expr:
+            unspliced_expression = adata.layers["Mu"][:, adata.var_names.get_loc(gene_name)].flatten() 
+            spliced_expression = adata.layers["Ms"][:, adata.var_names.get_loc(gene_name)].flatten() 
+        else:
+            unspliced_expression = adata.layers["unspliced"][:, adata.var_names.get_loc(gene_name)].flatten()
+            spliced_expression = adata.layers["spliced"][:, adata.var_names.get_loc(gene_name)].flatten()
+
+        # Normalize the expression data
+        unspliced_expression_min, unspliced_expression_max = np.min(unspliced_expression), np.max(unspliced_expression)
+        spliced_expression_min, spliced_expression_max = np.min(spliced_expression), np.max(spliced_expression)
+
+        # Min-Max normalization
+        unspliced_expression = (unspliced_expression - unspliced_expression_min) / (unspliced_expression_max - unspliced_expression_min)
+        spliced_expression = (spliced_expression - spliced_expression_min) / (spliced_expression_max - spliced_expression_min)
+
+        # Extract the velocity data
+        unspliced_velocity = adata.layers['velocity_u'][:, adata.var_names.get_loc(gene_name)].flatten()
+        spliced_velocity = adata.layers['velocity'][:, adata.var_names.get_loc(gene_name)].flatten()
+
+        def custom_scale(data):
+            max_abs_value = np.max(np.abs(data))  # Find the maximum absolute value
+            scaled_data = data / max_abs_value  # Scale by the maximum absolute value
+            return scaled_data
+
+        if norm_velocity:
+            unspliced_velocity = custom_scale(unspliced_velocity)
+            spliced_velocity = custom_scale(spliced_velocity)
+
+
+        # Apply any desired transformations (e.g., log) here
+        if log:
+            # Apply log transformation safely, ensuring no log(0)
+            unspliced_velocity = np.log1p(unspliced_velocity)
+            spliced_velocity = np.log1p(spliced_velocity)
+
+        # Generate boolean masks for conditions and apply them
+        if filter_cells:
+            valid_idx = (unspliced_expression > 0) & (spliced_expression > 0)
+        else:
+            valid_idx = (unspliced_expression >= 0) & (spliced_expression >= 0)
+
+        # Filter data based on valid_idx
+        unspliced_expression_filtered = unspliced_expression[valid_idx]
+        spliced_expression_filtered = spliced_expression[valid_idx]
+        unspliced_velocity_filtered = unspliced_velocity[valid_idx]
+        spliced_velocity_filtered = spliced_velocity[valid_idx]
+
+        # Also filter cell type information to match the filtered expressions
+        # First, get unique cell types and their corresponding colors
+        unique_cell_types = adata.obs[cell_type_key].cat.categories
+        celltype_colors = adata.uns[f"{cell_type_key}_colors"]
+        
+        # Create a mapping of cell type to its color
+        celltype_to_color = dict(zip(unique_cell_types, celltype_colors))
+
+        # Filter cell types from the data to get a list of colors for the filtered data points
+        cell_types_filtered = adata.obs[cell_type_key][valid_idx]
+        colors = cell_types_filtered.map(celltype_to_color).to_numpy()
+        plt.figure(figsize=(9, 6.5), dpi=100)
+    # Lower dpi here if the file is still too large    scatter = plt.scatter(unspliced_expression_filtered, spliced_expression_filtered, c=colors, alpha=0.6)
+
+        """# Plot velocity vectors
+        for i in range(len(unspliced_expression_filtered)):
+            cell_type_index = np.where(unique_cell_types == cell_types_filtered[i])[0][0]
+            arrow_color = celltype_to_color[cell_types_filtered[i]]  # Use the color corresponding to the cell type
+            plt.arrow(
+                unspliced_expression_filtered[i], spliced_expression_filtered[i], 
+                unspliced_velocity_filtered[i] * u_scale, spliced_velocity_filtered[i] * s_scale, 
+                color=arrow_color, alpha=alpha, head_width=head_width, head_length=head_length, length_includes_head=length_includes_head
+            )"""
+
+        # Plot velocity vectors
+        for i in range(len(unspliced_expression_filtered)):
+            cell_type_index = np.where(unique_cell_types == cell_types_filtered[i])[0][0]
+            arrow_color = celltype_to_color[cell_types_filtered[i]]  # Use the color corresponding to the cell type
+            plt.arrow(
+                spliced_expression_filtered[i], unspliced_expression_filtered[i], 
+                spliced_velocity_filtered[i] * s_scale, unspliced_velocity_filtered[i] * u_scale, 
+                color=arrow_color, alpha=alpha, head_width=head_width, head_length=head_length, length_includes_head=length_includes_head
+            )
+
+        plt.ylabel(f'Normalized Unspliced Expression of {gene_name}', fontsize=axis_fontsize)
+        plt.xlabel(f'Normalized Spliced Expression of {gene_name}', fontsize=axis_fontsize)
+        plt.title(f'Expression and Velocity of {gene_name} by Cell Type', fontsize=title_fontsize)
+
+        # Increase the font size of the tick labels
+        plt.xticks(fontsize=tick_fontsize)
+        plt.yticks(fontsize=tick_fontsize)
+
+        # Create a legend
+        patches = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=celltype_to_color[celltype], markersize=10, label=celltype) 
+                for celltype in unique_cell_types]
+        plt.legend(handles=patches, title="Cell Type", bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=legend_fontsize, title_fontsize=title_fontsize)
+
+        plt.show()
+
+        '''if save_plot:
+            plt.savefig(save_path, format='png', bbox_inches='tight')
+            print(f"Plot saved to {save_path}")'''
 
 
 

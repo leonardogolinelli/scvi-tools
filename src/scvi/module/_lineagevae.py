@@ -258,8 +258,13 @@ class LINEAGEVAE(VAE):
         u_s = torch.cat([unspliced, spliced], dim=1)  # (B, G*2)
         idx = tensors[REGISTRY_KEYS.INDICES_KEY].squeeze(-1)
 
+        
+        #p_sign = self.velo_decoder.p_sign
+        #target = torch.full_like(p_sign, 0.25)
+        #loss_uniform = F.mse_loss(p_sign, target, reduction='mean')
+
         # compute just the velocity‐only loss
-        velo_loss = self._velocity_loss(vel, u_s, idx)
+        velo_loss = self._velocity_loss(vel, u_s, idx)# + 0.1*loss_uniform
 
         zeros = torch.zeros(unspliced.shape[0], device=velo_loss.device)
 

@@ -593,8 +593,7 @@ class VelocityDecoder(nn.Module):
         )
 
         self.params_decoder = nn.Sequential(
-                nn.Linear(n_hidden, n_output),
-                #nn.ReLU(),
+                nn.Linear(n_hidden, n_output)
         )
 
     def forward(self, z: torch.Tensor, x: torch.Tensor):
