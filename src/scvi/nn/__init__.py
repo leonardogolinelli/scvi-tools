@@ -12,7 +12,6 @@ from ._base_components import (
     MultiEncoder,
 )
 from ._embedding import Embedding
-from ._utils import one_hot
 
 __all__ = [
     "FCLayers",
@@ -25,6 +24,5 @@ __all__ = [
     "MaskedLinearDecoder",
     "MultiEncoder",
     "MultiDecoder",
-    "one_hot",
     "Embedding",
 ]
