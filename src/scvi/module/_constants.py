@@ -9,6 +9,7 @@ class _MODULE_KEYS(NamedTuple):
     Z_KEY: str = "z"
     QZ_KEY: str = "qz"
     QZM_KEY: str = "qzm"
+    MEAN_KEY: str = "mu"
     QZV_KEY: str = "qzv"
     LIBRARY_KEY: str = "library"
     QL_KEY: str = "ql"

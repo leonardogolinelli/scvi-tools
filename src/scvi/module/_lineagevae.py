@@ -175,18 +175,27 @@ class LINEAGEVAE(VAE):
     def _get_generative_input(self, tensors, inference_outputs):
         # first get the standard args
         gen_inputs = super()._get_generative_input(tensors, inference_outputs)
+        
         # now build the x you actually want
         u = tensors[REGISTRY_KEYS.UNSPLICED_KEY]
         s = tensors[REGISTRY_KEYS.SPLICED_KEY]
+
         x = torch.cat([u, s], dim=1)
+
         # and inject it under the name your generative() expects:
         gen_inputs[MODULE_KEYS.X_KEY] = x
+
+        mu = inference_outputs[MODULE_KEYS.QZ_KEY].mean 
+
+        gen_inputs[MODULE_KEYS.MEAN_KEY] = mu
+
         return gen_inputs
     
     @auto_move_data
     def generative(self,
                    x,           # <-- will now get the x you just inserted
                    z,
+                   mu,
                    library,
                    batch_index,
                    cont_covs=None,
@@ -195,6 +204,7 @@ class LINEAGEVAE(VAE):
                    y=None,
                    transform_batch=None,
     ):
+        
         # call the parent to get everything but 'x'
         outputs = super().generative(
             z,
@@ -206,9 +216,13 @@ class LINEAGEVAE(VAE):
             y=y,
             transform_batch=transform_batch,
         )
+
         # now you can use x however you like
-        velo = self.velo_decoder(z, x)
+        # test feeding the mean instead of z sample
+        velo = self.velo_decoder(mu, x)
+        #velo = self.velo_decoder(z, x)
         outputs[MODULE_KEYS.VELOCITY_KEY] = velo
+
         return outputs
 
     def _velocity_loss(
